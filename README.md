@@ -29,6 +29,40 @@ VITE_SUPABASE_ANON_KEY=your_anon_key
 npm run dev
 ```
 
+## GitHub Pages deployment
+
+This project is configured for automatic GitHub Pages deployment via GitHub Actions.
+
+### 1) Add production environment variables
+
+In your GitHub repository settings, add these Actions secrets:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+Path: **Settings -> Secrets and variables -> Actions**
+
+### 2) Enable GitHub Pages source
+
+In **Settings -> Pages**, set:
+
+- **Source:** GitHub Actions
+
+### 3) Deploy
+
+Push to `main`. The workflow at `.github/workflows/deploy-pages.yml` will:
+
+- install dependencies
+- run lint
+- build with Vite
+- upload `dist/`
+- deploy to GitHub Pages
+
+The Vite config automatically sets the correct `base` path for Pages:
+
+- local/dev builds use `/`
+- CI Pages builds use `/<repo-name>/`
+
 ## 1) Database schema (SQL)
 
 SQL is in [`supabase/schema.sql`](./supabase/schema.sql).
