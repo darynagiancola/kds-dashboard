@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { OrderCard } from './OrderCard'
 import { supabase } from '../lib/supabaseClient'
 import { ORDER_STATUSES, type Order, type OrderStatus } from '../types/orders'
+import { createIncomingMockOrder, initialMockOrders } from '../lib/mockOrders'
 
 type OrderRow = {
   id: number
   table_number: number
   status: OrderStatus
+  priority?: Order['priority']
   created_at: string
   order_items: {
     id: number
@@ -36,36 +38,39 @@ export const KdsDashboard = () => {
   const [error, setError] = useState<string | null>(null)
   const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const [isDemoMode, setIsDemoMode] = useState(false)
 
   const fetchOrders = useCallback(async () => {
-      if (!supabase) {
-        setError(
-          'Missing Supabase credentials. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.',
-        )
-        setLoading(false)
-        return
-      }
-
-      const { data, error: queryError } = await supabase
-        .from('orders')
-        .select('id, table_number, status, created_at, order_items(id, name, modifiers(id, text))')
-        .order('created_at', { ascending: true })
-
-      if (queryError) {
-        setError(queryError.message)
-      } else {
-        const parsedOrders = ((data as OrderRow[] | null) ?? []).map((order) => ({
-          ...order,
-          order_items: (order.order_items ?? []).map((item) => ({
-            ...item,
-            modifiers: item.modifiers ?? [],
-          })),
-        }))
-        setOrders(parsedOrders)
-        setError(null)
-      }
+    if (!supabase) {
+      setOrders(initialMockOrders())
+      setIsDemoMode(true)
+      setError('Missing Supabase credentials. Running in demo mode with sample kitchen orders.')
       setLoading(false)
-    }, [])
+      return
+    }
+
+    const { data, error: queryError } = await supabase
+      .from('orders')
+      .select('id, table_number, status, created_at, order_items(id, name, modifiers(id, text))')
+      .order('created_at', { ascending: true })
+
+    if (queryError) {
+      setError(queryError.message)
+    } else {
+      const parsedOrders = ((data as OrderRow[] | null) ?? []).map((order) => ({
+        ...order,
+        priority: order.priority ?? 'normal',
+        order_items: (order.order_items ?? []).map((item) => ({
+          ...item,
+          modifiers: item.modifiers ?? [],
+        })),
+      }))
+      setOrders(parsedOrders)
+      setIsDemoMode(false)
+      setError(null)
+    }
+    setLoading(false)
+  }, [])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -105,6 +110,18 @@ export const KdsDashboard = () => {
     }
   }, [fetchOrders])
 
+  useEffect(() => {
+    if (!isDemoMode) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      setOrders((current) => [createIncomingMockOrder(), ...current].slice(0, 18))
+    }, 45_000)
+
+    return () => window.clearInterval(timer)
+  }, [isDemoMode])
+
   const groupedOrders = useMemo(() => {
     return ORDER_STATUSES.reduce<Record<OrderStatus, Order[]>>(
       (acc, status) => {
@@ -116,10 +133,6 @@ export const KdsDashboard = () => {
   }, [orders])
 
   const handleMoveOrder = async (orderId: number, nextStatus: OrderStatus) => {
-    if (!supabase) {
-      return
-    }
-
     setUpdatingOrderId(orderId)
     setOrders((current) =>
       current.map((order) =>
@@ -132,10 +145,12 @@ export const KdsDashboard = () => {
       ),
     )
 
-    const { error: updateError } = await supabase
-      .from('orders')
-      .update({ status: nextStatus })
-      .eq('id', orderId)
+    if (!supabase) {
+      setTimeout(() => setUpdatingOrderId(null), 250)
+      return
+    }
+
+    const { error: updateError } = await supabase.from('orders').update({ status: nextStatus }).eq('id', orderId)
 
     if (updateError) {
       setError(updateError.message)

@@ -8,6 +8,18 @@ interface OrderCardProps {
   isUpdating: boolean
 }
 
+const priorityStyles: Record<NonNullable<Order['priority']>, string> = {
+  normal: 'border-slate-600 bg-slate-800 text-slate-200',
+  high: 'border-amber-400/70 bg-amber-500/20 text-amber-200',
+  rush: 'border-rose-400/80 bg-rose-500/20 text-rose-200',
+}
+
+const priorityLabel: Record<NonNullable<Order['priority']>, string> = {
+  normal: 'Normal',
+  high: 'High',
+  rush: 'Rush',
+}
+
 const nextStatusByCurrent: Partial<Record<OrderStatus, OrderStatus>> = {
   new: 'prep',
   prep: 'ready',
@@ -21,6 +33,7 @@ const buttonLabelByStatus: Partial<Record<OrderStatus, string>> = {
 export const OrderCard = ({ order, nowMs, onMove, isUpdating }: OrderCardProps) => {
   const nextStatus = nextStatusByCurrent[order.status]
   const actionLabel = buttonLabelByStatus[order.status]
+  const priority = order.priority ?? 'normal'
 
   return (
     <article className="rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-lg">
@@ -28,6 +41,11 @@ export const OrderCard = ({ order, nowMs, onMove, isUpdating }: OrderCardProps) 
         <div>
           <h3 className="text-xl font-bold text-slate-100">Order #{order.id}</h3>
           <p className="text-lg text-slate-300">Table {order.table_number}</p>
+          <span
+            className={`mt-2 inline-flex rounded-md border px-2.5 py-1 text-sm font-bold uppercase tracking-wide ${priorityStyles[priority]}`}
+          >
+            {priorityLabel[priority]}
+          </span>
         </div>
         <p className="rounded-md bg-slate-800 px-3 py-2 text-lg font-semibold text-amber-300">
           {formatAge(order.created_at, nowMs)}
