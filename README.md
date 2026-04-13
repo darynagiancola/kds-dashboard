@@ -31,7 +31,9 @@ npm run dev
 
 ## GitHub Pages deployment
 
-This project is configured for automatic GitHub Pages deployment via GitHub Actions.
+This project is configured to deploy at:
+
+`https://darynagiancola.github.io/kds-dashboard/`
 
 ### 1) Add production environment variables
 
@@ -54,14 +56,11 @@ Push to `main`. The workflow at `.github/workflows/deploy-pages.yml` will:
 
 - install dependencies
 - run lint
-- build with Vite
+- build using `npm run build:pages` (Vite base path = `/kds-dashboard/`)
 - upload `dist/`
 - deploy to GitHub Pages
 
-The Vite config automatically sets the correct `base` path for Pages:
-
-- local/dev builds use `/`
-- CI Pages builds use `/<repo-name>/`
+The app base path is explicitly set for Pages builds so assets load correctly under `/kds-dashboard/`.
 
 ## 1) Database schema (SQL)
 

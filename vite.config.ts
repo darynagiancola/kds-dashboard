@@ -2,9 +2,8 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-const repositoryName = process.env.GITHUB_REPOSITORY?.split('/')[1]
-const defaultBasePath =
-  process.env.GITHUB_ACTIONS === 'true' && repositoryName ? `/${repositoryName}/` : '/'
+const pagesBasePath = '/kds-dashboard/'
+const defaultBasePath = process.env.GITHUB_PAGES === 'true' ? pagesBasePath : '/'
 
 // https://vite.dev/config/
 export default defineConfig({
