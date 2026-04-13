@@ -23,10 +23,6 @@ body {
   min-height: 100vh;
 }
 
-.order-card-enter {
-  animation: order-card-enter 220ms ease-out both;
-}
-
 .kds-card {
   transition:
     transform 220ms ease,

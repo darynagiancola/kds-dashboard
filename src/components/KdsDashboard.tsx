@@ -24,32 +24,32 @@ const columnMeta: Record<
   OrderStatus,
   {
     label: string
-    accent: string
-    panelClass: string
+    dotClass: string
+    headerBg: string
     countClass: string
     emptyClass: string
   }
 > = {
   new: {
-    label: 'New',
-    accent: 'text-sky-200',
-    panelClass: 'border-sky-500/35 bg-sky-500/5',
-    countClass: 'border-sky-400/50 bg-sky-500/20 text-sky-100',
-    emptyClass: 'border-sky-500/30 text-sky-200/75',
+    label: 'New Orders',
+    dotClass: 'bg-sky-400',
+    headerBg: 'bg-sky-500/10',
+    countClass: 'bg-slate-800 text-slate-300',
+    emptyClass: 'border-sky-500/25 text-slate-400',
   },
   prep: {
-    label: 'Prep',
-    accent: 'text-amber-200',
-    panelClass: 'border-amber-500/35 bg-amber-500/5',
-    countClass: 'border-amber-400/50 bg-amber-500/20 text-amber-100',
-    emptyClass: 'border-amber-500/30 text-amber-200/75',
+    label: 'In Progress',
+    dotClass: 'bg-amber-400',
+    headerBg: 'bg-amber-500/10',
+    countClass: 'bg-slate-800 text-slate-300',
+    emptyClass: 'border-amber-500/25 text-slate-400',
   },
   ready: {
-    label: 'Ready',
-    accent: 'text-emerald-200',
-    panelClass: 'border-emerald-500/35 bg-emerald-500/5',
-    countClass: 'border-emerald-400/50 bg-emerald-500/20 text-emerald-100',
-    emptyClass: 'border-emerald-500/30 text-emerald-200/75',
+    label: 'Ready to Serve',
+    dotClass: 'bg-emerald-400',
+    headerBg: 'bg-emerald-500/10',
+    countClass: 'bg-slate-800 text-slate-300',
+    emptyClass: 'border-emerald-500/25 text-slate-400',
   },
 }
 
@@ -202,85 +202,91 @@ export const KdsDashboard = () => {
     setUpdatingOrderId(null)
   }
 
+  const displayTime = useMemo(
+    () =>
+      new Intl.DateTimeFormat([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(nowMs),
+    [nowMs],
+  )
+
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-6 text-slate-50 md:px-8 md:py-7">
-      <header className="mb-6 flex flex-col gap-3 border-b border-slate-700 pb-5 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-3xl font-black tracking-tight md:text-4xl">
-            Kitchen Display System
-          </h1>
-          <p className="mt-2 text-base font-medium text-slate-300 md:text-lg">
-            Live order board for the kitchen line
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-600 bg-slate-900 px-4 py-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
-          {supabase ? 'Realtime connected' : 'Supabase not configured'}
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-900/95 px-4 py-3 backdrop-blur-lg md:px-6">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-slate-100">Kitchen Display</h1>
+            <p className="text-sm text-slate-400">Real-time order management</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 font-mono text-base font-medium text-slate-200">
+              {displayTime}
+            </div>
+            <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300">
+              {supabase ? 'Realtime connected' : 'Demo mode'}
+            </div>
+          </div>
         </div>
       </header>
 
-      {error && (
-        <div className="mb-5 rounded-xl border border-rose-500/60 bg-rose-500/15 px-4 py-3 text-base font-medium text-rose-100">
-          {error}
-        </div>
-      )}
+      <div className="p-4 md:p-5">
+        {error && (
+          <div className="mb-4 rounded-xl border border-rose-500/50 bg-rose-500/15 px-4 py-3 text-sm font-medium text-rose-100">
+            {error}
+          </div>
+        )}
 
-      {loading ? (
-        <div className="rounded-xl border border-slate-700 bg-slate-900 px-6 py-10 text-center text-xl font-semibold text-slate-200">
-          Loading orders...
-        </div>
-      ) : (
-        <section className="grid gap-4 xl:grid-cols-3 xl:gap-5">
-          {ORDER_STATUSES.map((status) => {
-            const meta = columnMeta[status]
+        {loading ? (
+          <div className="rounded-xl border border-slate-700 bg-slate-900 px-6 py-10 text-center text-xl font-semibold text-slate-200">
+            Loading orders...
+          </div>
+        ) : (
+          <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {ORDER_STATUSES.map((status) => {
+              const meta = columnMeta[status]
 
-            return (
-              <section
-                key={status}
-                className={`rounded-2xl border p-4 shadow-[0_0_0_1px_rgba(15,23,42,0.7)] md:p-5 ${meta.panelClass}`}
-              >
-                <header className="mb-4 rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                        Line Status
-                      </p>
-                      <h2 className={`mt-1 text-3xl font-black tracking-tight ${meta.accent}`}>
-                        {meta.label}
-                      </h2>
-                    </div>
+              return (
+                <section key={status} className="space-y-3">
+                  <header
+                    className={`flex items-center gap-3 rounded-xl border border-slate-700 px-4 py-3 ${meta.headerBg}`}
+                  >
+                    <div className={`h-2.5 w-2.5 rounded-full ${meta.dotClass}`} />
+                    <h2 className="text-base font-semibold text-slate-100">{meta.label}</h2>
                     <span
-                      className={`min-w-12 rounded-lg border px-3 py-2 text-center text-2xl font-black tabular-nums ${meta.countClass}`}
+                      className={`ml-auto rounded-lg px-2 py-1 text-xs font-semibold shadow-[0_2px_10px_rgba(2,6,23,0.35)] ${meta.countClass}`}
                     >
                       {groupedOrders[status].length}
                     </span>
-                  </div>
-                </header>
+                  </header>
 
-                <div className="space-y-4">
-                  {groupedOrders[status].length === 0 ? (
-                    <p
-                      className={`rounded-xl border border-dashed px-4 py-8 text-center text-lg font-semibold ${meta.emptyClass}`}
-                    >
-                      {EMPTY_COLUMN_TEXT[status]}
-                    </p>
-                  ) : (
-                    groupedOrders[status].map((order) => (
-                      <OrderCard
-                        key={order.id}
-                        order={order}
-                        nowMs={nowMs}
-                        onMove={handleMoveOrder}
-                        isUpdating={updatingOrderId === order.id}
-                        isMoving={movingOrderIds.includes(order.id)}
-                      />
-                    ))
-                  )}
-                </div>
-              </section>
-            )
-          })}
-        </section>
-      )}
+                  <div className="space-y-3">
+                    {groupedOrders[status].length === 0 ? (
+                      <p
+                        className={`rounded-xl border border-dashed bg-slate-900/50 px-4 py-8 text-center text-sm font-medium ${meta.emptyClass}`}
+                      >
+                        {EMPTY_COLUMN_TEXT[status]}
+                      </p>
+                    ) : (
+                      groupedOrders[status].map((order) => (
+                        <OrderCard
+                          key={order.id}
+                          order={order}
+                          nowMs={nowMs}
+                          onMove={handleMoveOrder}
+                          isUpdating={updatingOrderId === order.id}
+                          isMoving={movingOrderIds.includes(order.id)}
+                        />
+                      ))
+                    )}
+                  </div>
+                </section>
+              )
+            })}
+          </section>
+        )}
+      </div>
     </main>
   )
 }
