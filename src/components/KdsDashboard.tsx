@@ -160,29 +160,37 @@ export const KdsDashboard = () => {
     )
   }, [orders])
 
-  const handleMoveOrder = async (orderId: number, nextStatus: OrderStatus) => {
+  const handleMoveOrder = async (orderId: number, currentStatus: OrderStatus) => {
+    const nextStep: OrderStatus | 'complete' =
+      currentStatus === 'new' ? 'prep' : currentStatus === 'prep' ? 'ready' : 'complete'
+
     setMovingOrderIds((current) => [...current, orderId])
     setUpdatingOrderId(orderId)
+    setOrders((current) =>
+      nextStep === 'complete'
+        ? current.filter((order) => order.id !== orderId)
+        : current.map((order) =>
+            order.id === orderId
+              ? {
+                  ...order,
+                  status: nextStep,
+                }
+              : order,
+          ),
+    )
     window.setTimeout(() => {
-      setOrders((current) =>
-        current.map((order) =>
-          order.id === orderId
-            ? {
-                ...order,
-                status: nextStatus,
-              }
-            : order,
-        ),
-      )
       setMovingOrderIds((current) => current.filter((id) => id !== orderId))
-    }, 190)
+    }, 220)
 
     if (!supabase) {
       setTimeout(() => setUpdatingOrderId(null), 250)
       return
     }
 
-    const { error: updateError } = await supabase.from('orders').update({ status: nextStatus }).eq('id', orderId)
+    const { error: updateError } =
+      nextStep === 'complete'
+        ? await supabase.from('orders').delete().eq('id', orderId)
+        : await supabase.from('orders').update({ status: nextStep }).eq('id', orderId)
 
     if (updateError) {
       setError(updateError.message)

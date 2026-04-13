@@ -27,6 +27,23 @@ body {
   animation: order-card-enter 220ms ease-out both;
 }
 
+.kds-card {
+  transition:
+    transform 220ms ease,
+    opacity 220ms ease,
+    box-shadow 220ms ease,
+    border-color 220ms ease;
+}
+
+.kds-card-enter {
+  animation: order-card-enter 220ms ease-out both;
+}
+
+.kds-card-moving {
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+}
+
 @keyframes order-card-enter {
   from {
     opacity: 0;
