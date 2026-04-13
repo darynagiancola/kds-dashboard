@@ -29,6 +29,15 @@ VITE_SUPABASE_ANON_KEY=your_anon_key
 npm run dev
 ```
 
+## Demo mode (no Supabase required)
+
+If `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` are missing, the app automatically runs in demo mode:
+
+- seeded sample kitchen tickets are shown across **New**, **Prep**, and **Ready**
+- each card includes realistic table numbers, menu items, modifiers, elapsed time, and priority labels (**Normal**, **High**, **Rush**)
+- new mock incoming orders are added periodically so the board looks live
+- you still see a warning banner indicating Supabase is not configured
+
 ## GitHub Pages deployment
 
 This project is configured to deploy at:
