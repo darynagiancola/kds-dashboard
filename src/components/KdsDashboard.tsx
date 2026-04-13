@@ -66,6 +66,7 @@ export const KdsDashboard = () => {
   const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [isDemoMode, setIsDemoMode] = useState(false)
+  const [movingOrderIds, setMovingOrderIds] = useState<number[]>([])
 
   const fetchOrders = useCallback(async () => {
     if (!supabase) {
@@ -160,17 +161,21 @@ export const KdsDashboard = () => {
   }, [orders])
 
   const handleMoveOrder = async (orderId: number, nextStatus: OrderStatus) => {
+    setMovingOrderIds((current) => [...current, orderId])
     setUpdatingOrderId(orderId)
-    setOrders((current) =>
-      current.map((order) =>
-        order.id === orderId
-          ? {
-              ...order,
-              status: nextStatus,
-            }
-          : order,
-      ),
-    )
+    window.setTimeout(() => {
+      setOrders((current) =>
+        current.map((order) =>
+          order.id === orderId
+            ? {
+                ...order,
+                status: nextStatus,
+              }
+            : order,
+        ),
+      )
+      setMovingOrderIds((current) => current.filter((id) => id !== orderId))
+    }, 190)
 
     if (!supabase) {
       setTimeout(() => setUpdatingOrderId(null), 250)
@@ -258,6 +263,7 @@ export const KdsDashboard = () => {
                         nowMs={nowMs}
                         onMove={handleMoveOrder}
                         isUpdating={updatingOrderId === order.id}
+                        isMoving={movingOrderIds.includes(order.id)}
                       />
                     ))
                   )}

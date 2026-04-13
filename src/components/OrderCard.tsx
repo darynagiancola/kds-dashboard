@@ -4,8 +4,9 @@ import { formatAge } from '../lib/time'
 interface OrderCardProps {
   order: Order
   nowMs: number
-  onMove: (orderId: number, nextStatus: OrderStatus) => Promise<void>
+  onMove: (orderId: number, currentStatus: OrderStatus) => Promise<void>
   isUpdating: boolean
+  isMoving: boolean
 }
 
 const priorityStyles: Record<NonNullable<Order['priority']>, string> = {
@@ -20,23 +21,40 @@ const priorityLabel: Record<NonNullable<Order['priority']>, string> = {
   rush: 'Rush',
 }
 
-const nextStatusByCurrent: Partial<Record<OrderStatus, OrderStatus>> = {
-  new: 'prep',
-  prep: 'ready',
+const actionByStatus: Record<
+  OrderStatus,
+  { label: string; pendingLabel: string; buttonClass: string }
+> = {
+  new: {
+    label: 'Start Cooking',
+    pendingLabel: 'Starting...',
+    buttonClass:
+      'border-amber-300/50 bg-amber-400 text-slate-950 hover:bg-amber-300 disabled:border-slate-600 disabled:bg-slate-700 disabled:text-slate-400',
+  },
+  prep: {
+    label: 'Mark Ready',
+    pendingLabel: 'Marking...',
+    buttonClass:
+      'border-emerald-300/50 bg-emerald-400 text-slate-950 hover:bg-emerald-300 disabled:border-slate-600 disabled:bg-slate-700 disabled:text-slate-400',
+  },
+  ready: {
+    label: 'Served / Complete',
+    pendingLabel: 'Completing...',
+    buttonClass:
+      'border-cyan-300/50 bg-cyan-400 text-slate-950 hover:bg-cyan-300 disabled:border-slate-600 disabled:bg-slate-700 disabled:text-slate-400',
+  },
 }
 
-const buttonLabelByStatus: Partial<Record<OrderStatus, string>> = {
-  new: 'Move to Prep',
-  prep: 'Move to Ready',
-}
-
-export const OrderCard = ({ order, nowMs, onMove, isUpdating }: OrderCardProps) => {
-  const nextStatus = nextStatusByCurrent[order.status]
-  const actionLabel = buttonLabelByStatus[order.status]
+export const OrderCard = ({ order, nowMs, onMove, isUpdating, isMoving }: OrderCardProps) => {
+  const actionMeta = actionByStatus[order.status]
   const priority = order.priority ?? 'normal'
 
   return (
-    <article className="rounded-2xl border border-slate-600 bg-slate-900 px-5 py-4 shadow-[0_10px_24px_rgba(2,6,23,0.55)]">
+    <article
+      className={`kds-card kds-card-enter rounded-2xl border border-slate-600 bg-slate-900 px-5 py-4 shadow-[0_10px_24px_rgba(2,6,23,0.55)] ${
+        isMoving ? 'kds-card-moving' : ''
+      }`}
+    >
       <header className="mb-4 flex items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">Table</p>
@@ -71,20 +89,14 @@ export const OrderCard = ({ order, nowMs, onMove, isUpdating }: OrderCardProps) 
         ))}
       </ul>
 
-      {nextStatus && actionLabel ? (
-        <button
-          type="button"
-          onClick={() => onMove(order.id, nextStatus)}
-          disabled={isUpdating}
-          className="mt-5 w-full rounded-xl border border-emerald-300/40 bg-emerald-400 px-4 py-4 text-xl font-black uppercase tracking-[0.08em] text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-700 disabled:text-slate-400"
-        >
-          {isUpdating ? 'Updating...' : actionLabel}
-        </button>
-      ) : (
-        <div className="mt-5 rounded-xl border border-emerald-500/70 bg-emerald-500/15 px-4 py-4 text-center text-xl font-black uppercase tracking-[0.08em] text-emerald-300">
-          Ready for pickup
-        </div>
-      )}
+      <button
+        type="button"
+        onClick={() => onMove(order.id, order.status)}
+        disabled={isUpdating}
+        className={`mt-5 w-full rounded-xl border px-4 py-4 text-xl font-black uppercase tracking-[0.08em] transition disabled:cursor-not-allowed ${actionMeta.buttonClass}`}
+      >
+        {isUpdating ? actionMeta.pendingLabel : actionMeta.label}
+      </button>
     </article>
   )
 }
