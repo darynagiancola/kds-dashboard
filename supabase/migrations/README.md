@@ -17,11 +17,14 @@ Apply these files in numeric order:
 13. `013_kds_transition_rpc_and_entity_event_triggers.sql`
 14. `014_order_events_reliability_hardening.sql`
 15. `015_audit_repair_event_seq_and_client_observations.sql`
+16. `016_fix_kds_log_order_event_ambiguity.sql`
 
 Then run test script:
 
 - `../tests/rls_verification_queries.sql`
 - `../tests/order_events_debug_queries.sql`
+- `../tests/reset_kds_seed_orders.sql` (test-only insert-only reseed utility)
+- `../tests/archive_old_kds_test_batches.sql` (optional test-only archival cleanup)
 
 ## Notes
 

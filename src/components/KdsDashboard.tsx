@@ -3,6 +3,16 @@ import { OrderCard } from './OrderCard'
 import { isSupabaseConfigured, supabase } from '../lib/supabaseClient'
 import { ORDER_STATUSES, type Order, type OrderStatus } from '../types/orders'
 import { createIncomingMockOrder, initialMockOrders } from '../lib/mockOrders'
+import {
+  DEMO_SCENARIOS,
+  SCENARIO_BY_ID,
+  buildRecoveryPlaybook,
+  nextStatus,
+  type DemoDetectedIssue,
+  type DemoIssueCategory,
+  type DemoScenarioId,
+  type RecoveryStep,
+} from '../lib/demoSimulator'
 
 type DatabaseOrderStatus = 'new' | 'in_progress' | 'ready' | 'delivered' | 'prep'
 
@@ -25,14 +35,68 @@ type OrderRow = {
 type SortMode = 'oldest' | 'newest' | 'priority'
 type DensityMode = 'comfortable' | 'compact'
 type DataMode = 'demo' | 'live'
+type TriggerSource = 'manual' | 'auto'
+
+type DemoSimulationSignal = {
+  id: string
+  scenarioId: DemoScenarioId
+  details: string
+  createdAt: number
+}
+
+type DemoRecoveryContext =
+  | { scenarioId: 'order_disappears'; removedOrder: Order }
+  | { scenarioId: 'status_skips_stage'; orderId: number; expected: OrderStatus; actual: OrderStatus }
+  | { scenarioId: 'wrong_column'; orderId: number; expected: OrderStatus; actual: OrderStatus }
+  | { scenarioId: 'duplicate_status_change'; orderId: number; expected: OrderStatus; actual: OrderStatus }
+  | { scenarioId: 'realtime_event_delayed'; orderId: number; queuedStatus: OrderStatus; delayMs: number }
+  | { scenarioId: 'stale_state'; orderId: number; staleStatus: OrderStatus; canonicalStatus: OrderStatus }
+  | { scenarioId: 'inconsistent_screens'; orderId: number; screenA: OrderStatus; screenB: OrderStatus }
+
+type DemoScreenSnapshot = {
+  orderId: number
+  screenA: OrderStatus
+  screenB: OrderStatus
+  capturedAt: number
+}
+
+type DelayedDemoEvent = {
+  id: string
+  orderId: number
+  toStatus: OrderStatus
+  applyAt: number
+}
 
 const LATE_ORDER_MINUTES = 15
 const ERROR_PERSIST_MS = 10_000
+const DEMO_RECOVERY_STEP_MS = 900
+const DEMO_EVENT_DELAY_MS = 8_000
+const DEMO_AUTOSTART_SESSION_KEY = 'kds-demo-simulator-autostarted-v1'
 
 const priorityRank: Record<NonNullable<Order['priority']>, number> = {
   rush: 0,
   high: 1,
   normal: 2,
+}
+
+const demoCategoryLabel: Record<DemoIssueCategory, string> = {
+  logic_error: 'Logic Error',
+  race_condition: 'Race Condition',
+  realtime_delay: 'Realtime Delay',
+  data_inconsistency: 'Data Inconsistency',
+}
+
+const demoCategoryClass: Record<DemoIssueCategory, string> = {
+  logic_error: 'border-amber-500/40 bg-amber-500/15 text-amber-100',
+  race_condition: 'border-orange-500/40 bg-orange-500/15 text-orange-100',
+  realtime_delay: 'border-cyan-500/40 bg-cyan-500/15 text-cyan-100',
+  data_inconsistency: 'border-fuchsia-500/40 bg-fuchsia-500/15 text-fuchsia-100',
+}
+
+const recoveryStepClass: Record<RecoveryStep['status'], string> = {
+  pending: 'border-slate-700 bg-slate-900 text-slate-300',
+  running: 'border-sky-500/45 bg-sky-500/15 text-sky-100',
+  resolved: 'border-emerald-500/45 bg-emerald-500/15 text-emerald-100',
 }
 
 const toUiStatus = (status: DatabaseOrderStatus): OrderStatus | null => {
@@ -133,7 +197,18 @@ export const KdsDashboard = () => {
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [sortMode, setSortMode] = useState<SortMode>('oldest')
   const [densityMode, setDensityMode] = useState<DensityMode>('comfortable')
+
+  const [demoSignals, setDemoSignals] = useState<DemoSimulationSignal[]>([])
+  const [detectedIssue, setDetectedIssue] = useState<DemoDetectedIssue | null>(null)
+  const [recoverySteps, setRecoverySteps] = useState<RecoveryStep[]>([])
+  const [recoveryContext, setRecoveryContext] = useState<DemoRecoveryContext | null>(null)
+  const [isRecoveryRunning, setIsRecoveryRunning] = useState(false)
+  const [lastResolvedIssueId, setLastResolvedIssueId] = useState<string | null>(null)
+  const [delayedDemoEvents, setDelayedDemoEvents] = useState<DelayedDemoEvent[]>([])
+  const [screenSnapshot, setScreenSnapshot] = useState<DemoScreenSnapshot | null>(null)
+
   const activeMode: DataMode = liveModeAvailable ? dataMode : 'demo'
+
   const showPersistentError = useCallback((message: string) => {
     setError(message)
     setErrorVisibleUntil(Date.now() + ERROR_PERSIST_MS)
@@ -147,6 +222,17 @@ export const KdsDashboard = () => {
       return Date.now() >= errorVisibleUntil ? null : current
     })
   }, [errorVisibleUntil])
+
+  const clearDemoSimulatorState = useCallback(() => {
+    setDemoSignals([])
+    setDetectedIssue(null)
+    setRecoverySteps([])
+    setRecoveryContext(null)
+    setIsRecoveryRunning(false)
+    setLastResolvedIssueId(null)
+    setDelayedDemoEvents([])
+    setScreenSnapshot(null)
+  }, [])
 
   const getAgeMinutes = useCallback(
     (createdAt: string) => Math.max(0, Math.floor((nowMs - Date.parse(createdAt)) / 60_000)),
@@ -170,6 +256,7 @@ export const KdsDashboard = () => {
 
     setIsDemoMode(false)
     setModeNotice('Live mode active. Orders are synced with Supabase.')
+    clearDemoSimulatorState()
 
     const canonicalSelect =
       'id, table_number, status, created_at, order_items(id, name, modifiers:order_item_modifiers(id, text))'
@@ -219,7 +306,344 @@ export const KdsDashboard = () => {
       clearErrorIfExpired()
     }
     setLoading(false)
-  }, [activeMode, clearErrorIfExpired])
+  }, [activeMode, clearDemoSimulatorState, clearErrorIfExpired])
+
+  const applyDemoRecovery = useCallback((context: DemoRecoveryContext | null) => {
+    if (!context) {
+      return
+    }
+
+    if (context.scenarioId === 'order_disappears') {
+      setOrders((current) => {
+        if (current.some((order) => order.id === context.removedOrder.id)) {
+          return current
+        }
+        return [context.removedOrder, ...current]
+      })
+      return
+    }
+
+    if (context.scenarioId === 'status_skips_stage' || context.scenarioId === 'wrong_column') {
+      setOrders((current) =>
+        current.map((order) => (order.id === context.orderId ? { ...order, status: context.expected } : order)),
+      )
+      return
+    }
+
+    if (context.scenarioId === 'duplicate_status_change') {
+      setOrders((current) =>
+        current.map((order) => (order.id === context.orderId ? { ...order, status: context.expected } : order)),
+      )
+      return
+    }
+
+    if (context.scenarioId === 'realtime_event_delayed') {
+      setDelayedDemoEvents((queue) => {
+        if (queue.length === 0) {
+          return queue
+        }
+        setOrders((current) => {
+          let next = current
+          for (const delayed of queue) {
+            next = next.map((order) =>
+              order.id === delayed.orderId
+                ? {
+                    ...order,
+                    status: delayed.toStatus,
+                  }
+                : order,
+            )
+          }
+          return next
+        })
+        return []
+      })
+      return
+    }
+
+    if (context.scenarioId === 'stale_state') {
+      setOrders((current) =>
+        current.map((order) =>
+          order.id === context.orderId
+            ? {
+                ...order,
+                status: context.canonicalStatus,
+              }
+            : order,
+        ),
+      )
+      setScreenSnapshot((current) =>
+        current && current.orderId === context.orderId
+          ? {
+              ...current,
+              screenA: context.canonicalStatus,
+              screenB: context.canonicalStatus,
+              capturedAt: Date.now(),
+            }
+          : current,
+      )
+      return
+    }
+
+    if (context.scenarioId === 'inconsistent_screens') {
+      setScreenSnapshot((current) =>
+        current && current.orderId === context.orderId
+          ? {
+              ...current,
+              screenA: current.screenA,
+              screenB: current.screenA,
+              capturedAt: Date.now(),
+            }
+          : current,
+      )
+    }
+  }, [])
+
+  const runRecoveryPath = useCallback(
+    async (issue: DemoDetectedIssue, context: DemoRecoveryContext | null) => {
+      const playbook = buildRecoveryPlaybook(issue.scenarioId)
+      setRecoverySteps(playbook)
+      setIsRecoveryRunning(true)
+
+      for (let index = 0; index < playbook.length; index += 1) {
+        setRecoverySteps((current) =>
+          current.map((step, stepIndex) => {
+            if (stepIndex < index) {
+              return { ...step, status: 'resolved' }
+            }
+            if (stepIndex === index) {
+              return { ...step, status: 'running' }
+            }
+            return { ...step, status: 'pending' }
+          }),
+        )
+
+        if (playbook[index]?.id === 'repair') {
+          applyDemoRecovery(context)
+        }
+
+        await new Promise<void>((resolve) => {
+          window.setTimeout(() => resolve(), DEMO_RECOVERY_STEP_MS)
+        })
+
+        setRecoverySteps((current) =>
+          current.map((step, stepIndex) => (stepIndex === index ? { ...step, status: 'resolved' } : step)),
+        )
+      }
+
+      setIsRecoveryRunning(false)
+      setLastResolvedIssueId(issue.id)
+      setModeNotice(`Recovery completed for "${issue.label}". Simulator state is now reconciled.`)
+    },
+    [applyDemoRecovery],
+  )
+
+  const triggerRecoveryForCurrentIssue = useCallback(() => {
+    if (!detectedIssue || activeMode !== 'demo') {
+      return
+    }
+    void runRecoveryPath(detectedIssue, recoveryContext)
+  }, [activeMode, detectedIssue, recoveryContext, runRecoveryPath])
+
+  const triggerDemoScenario = useCallback(
+    (scenarioId: DemoScenarioId, source: TriggerSource = 'manual') => {
+      if (activeMode !== 'demo') {
+        return
+      }
+
+      const findOrder = (preferredStatuses: OrderStatus[]): Order => {
+        const found = orders.find((order) => preferredStatuses.includes(order.status))
+        if (found) {
+          return found
+        }
+        const fallback = createIncomingMockOrder()
+        setOrders((current) => [fallback, ...current])
+        return fallback
+      }
+
+      const registerIssue = (
+        headline: string,
+        explanation: string,
+        details: string,
+        context: DemoRecoveryContext,
+      ): DemoDetectedIssue => {
+        const now = Date.now()
+        const scenario = SCENARIO_BY_ID[scenarioId]
+        const issue: DemoDetectedIssue = {
+          id: `${scenarioId}-${now}`,
+          scenarioId,
+          label: scenario.label,
+          category: scenario.category,
+          headline,
+          explanation,
+          detectedAt: now,
+        }
+
+        setDetectedIssue(issue)
+        setRecoveryContext(context)
+        setRecoverySteps(buildRecoveryPlaybook(scenarioId))
+        setIsRecoveryRunning(false)
+        setLastResolvedIssueId(null)
+        setDemoSignals((current) =>
+          [
+            {
+              id: `signal-${now}`,
+              scenarioId,
+              details,
+              createdAt: now,
+            },
+            ...current,
+          ].slice(0, 8),
+        )
+
+        return issue
+      }
+
+      let issue: DemoDetectedIssue | null = null
+      let context: DemoRecoveryContext | null = null
+
+      if (scenarioId === 'order_disappears') {
+        const target = findOrder(['prep', 'new', 'ready'])
+        setOrders((current) => current.filter((order) => order.id !== target.id))
+        context = { scenarioId, removedOrder: target }
+        issue = registerIssue(
+          `Order #${target.id} disappeared from board`,
+          'A dropped event removed the ticket from all columns before completion.',
+          `Removed order #${target.id} from visible board state.`,
+          context,
+        )
+      }
+
+      if (scenarioId === 'status_skips_stage') {
+        const target = findOrder(['new'])
+        const expected: OrderStatus = 'prep'
+        const actual: OrderStatus = 'ready'
+        setOrders((current) =>
+          current.map((order) => (order.id === target.id ? { ...order, status: actual } : order)),
+        )
+        context = { scenarioId, orderId: target.id, expected, actual }
+        issue = registerIssue(
+          `Order #${target.id} skipped ${expected} stage`,
+          'Transition chain violated expected state machine (New -> Prep -> Ready).',
+          `Forced order #${target.id} from new directly to ready.`,
+          context,
+        )
+      }
+
+      if (scenarioId === 'wrong_column') {
+        const target = findOrder(['new', 'prep'])
+        const expected = nextStatus(target.status)
+        const actual = target.status
+        setMovingOrderIds((current) => (current.includes(target.id) ? current : [...current, target.id]))
+        window.setTimeout(() => {
+          setMovingOrderIds((current) => current.filter((id) => id !== target.id))
+        }, 260)
+        context = { scenarioId, orderId: target.id, expected, actual }
+        issue = registerIssue(
+          `Order #${target.id} failed to reach target column`,
+          'The UI acknowledged a move intent but card placement did not update as expected.',
+          `Expected ${expected}, but order #${target.id} remained in ${actual}.`,
+          context,
+        )
+      }
+
+      if (scenarioId === 'duplicate_status_change') {
+        const target = findOrder(['new'])
+        const expected = nextStatus(target.status)
+        const actual = nextStatus(expected)
+        setOrders((current) =>
+          current.map((order) => (order.id === target.id ? { ...order, status: actual } : order)),
+        )
+        context = { scenarioId, orderId: target.id, expected, actual }
+        issue = registerIssue(
+          `Order #${target.id} received duplicate transition`,
+          'Two transition applications raced and advanced the card more than once.',
+          `Applied duplicate transition for order #${target.id}: expected ${expected}, got ${actual}.`,
+          context,
+        )
+      }
+
+      if (scenarioId === 'realtime_event_delayed') {
+        const target = findOrder(['new', 'prep'])
+        const queuedStatus = nextStatus(target.status)
+        const delayedEvent: DelayedDemoEvent = {
+          id: `delay-${Date.now()}`,
+          orderId: target.id,
+          toStatus: queuedStatus,
+          applyAt: Date.now() + DEMO_EVENT_DELAY_MS,
+        }
+        setDelayedDemoEvents((current) => [delayedEvent, ...current])
+        context = { scenarioId, orderId: target.id, queuedStatus, delayMs: DEMO_EVENT_DELAY_MS }
+        issue = registerIssue(
+          `Realtime update delayed for order #${target.id}`,
+          'Incoming event is queued and arrives late, causing temporary board drift.',
+          `Queued delayed transition for order #${target.id} to ${queuedStatus}.`,
+          context,
+        )
+      }
+
+      if (scenarioId === 'stale_state') {
+        const target = findOrder(['new', 'prep'])
+        const staleStatus = target.status
+        const canonicalStatus = nextStatus(staleStatus)
+        setOrders((current) =>
+          current.map((order) =>
+            order.id === target.id
+              ? {
+                  ...order,
+                  status: canonicalStatus,
+                }
+              : order,
+          ),
+        )
+        setScreenSnapshot({
+          orderId: target.id,
+          screenA: staleStatus,
+          screenB: canonicalStatus,
+          capturedAt: Date.now(),
+        })
+        context = { scenarioId, orderId: target.id, staleStatus, canonicalStatus }
+        issue = registerIssue(
+          `Stale state detected on order #${target.id}`,
+          'One client snapshot remained stale while canonical state advanced.',
+          `Screen A stale=${staleStatus}; canonical=${canonicalStatus} for order #${target.id}.`,
+          context,
+        )
+      }
+
+      if (scenarioId === 'inconsistent_screens') {
+        const target = findOrder(['new', 'prep', 'ready'])
+        const screenA = target.status
+        const screenB: OrderStatus = screenA === 'ready' ? 'prep' : 'ready'
+        setScreenSnapshot({
+          orderId: target.id,
+          screenA,
+          screenB,
+          capturedAt: Date.now(),
+        })
+        context = { scenarioId, orderId: target.id, screenA, screenB }
+        issue = registerIssue(
+          `Screen mismatch for order #${target.id}`,
+          'Two displays diverged and now show different order statuses.',
+          `Display A=${screenA} while Display B=${screenB} for order #${target.id}.`,
+          context,
+        )
+      }
+
+      if (issue) {
+        setModeNotice(
+          source === 'auto'
+            ? `Demo simulator auto-triggered "${issue.label}" and started recovery analysis.`
+            : `Demo simulator triggered "${issue.label}" (${demoCategoryLabel[issue.category]}).`,
+        )
+      }
+
+      if (source === 'auto' && issue && context) {
+        void runRecoveryPath(issue, context)
+      }
+    },
+    [activeMode, orders, runRecoveryPath],
+  )
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -282,7 +706,10 @@ export const KdsDashboard = () => {
   }, [fetchOrders, activeMode])
 
   useEffect(() => {
-    if (!isDemoMode) {
+    if (!isDemoMode || activeMode !== 'demo') {
+      return
+    }
+    if (isRecoveryRunning || detectedIssue) {
       return
     }
 
@@ -291,10 +718,13 @@ export const KdsDashboard = () => {
     }, 35_000)
 
     return () => window.clearInterval(timer)
-  }, [isDemoMode])
+  }, [activeMode, detectedIssue, isDemoMode, isRecoveryRunning])
 
   useEffect(() => {
-    if (!isDemoMode) {
+    if (!isDemoMode || activeMode !== 'demo') {
+      return
+    }
+    if (isRecoveryRunning || detectedIssue) {
       return
     }
 
@@ -348,7 +778,64 @@ export const KdsDashboard = () => {
     }, 22_000)
 
     return () => window.clearInterval(timer)
-  }, [isDemoMode, updatingOrderId])
+  }, [activeMode, detectedIssue, isDemoMode, isRecoveryRunning, updatingOrderId])
+
+  useEffect(() => {
+    if (!isDemoMode || activeMode !== 'demo') {
+      return
+    }
+    if (delayedDemoEvents.length === 0) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      setDelayedDemoEvents((current) => {
+        const dueEvents = current.filter((event) => event.applyAt <= now)
+        if (dueEvents.length === 0) {
+          return current
+        }
+
+        setOrders((orderList) => {
+          let next = orderList
+          for (const event of dueEvents) {
+            next = next.map((order) =>
+              order.id === event.orderId
+                ? {
+                    ...order,
+                    status: event.toStatus,
+                  }
+                : order,
+            )
+          }
+          return next
+        })
+
+        return current.filter((event) => event.applyAt > now)
+      })
+    }, 350)
+
+    return () => window.clearInterval(timer)
+  }, [activeMode, delayedDemoEvents.length, isDemoMode])
+
+  useEffect(() => {
+    if (!isDemoMode || activeMode !== 'demo' || loading || orders.length === 0) {
+      return
+    }
+    if (typeof window === 'undefined') {
+      return
+    }
+    if (window.sessionStorage.getItem(DEMO_AUTOSTART_SESSION_KEY) === '1') {
+      return
+    }
+
+    window.sessionStorage.setItem(DEMO_AUTOSTART_SESSION_KEY, '1')
+    const timer = window.setTimeout(() => {
+      triggerDemoScenario('realtime_event_delayed', 'auto')
+    }, 400)
+
+    return () => window.clearTimeout(timer)
+  }, [activeMode, isDemoMode, loading, orders.length, triggerDemoScenario])
 
   const groupedOrders = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase()
@@ -432,6 +919,7 @@ export const KdsDashboard = () => {
     setUpdatingOrderId(null)
     setIsDemoMode(nextMode === 'demo')
     clearErrorIfExpired()
+    clearDemoSimulatorState()
     setDataMode(nextMode)
   }
 
@@ -512,6 +1000,15 @@ export const KdsDashboard = () => {
     setUpdatingOrderId(null)
   }
 
+  const clearDetectedDemoIssue = () => {
+    setDetectedIssue(null)
+    setRecoveryContext(null)
+    setRecoverySteps([])
+    setIsRecoveryRunning(false)
+    setLastResolvedIssueId(null)
+    setScreenSnapshot(null)
+  }
+
   const resetDemoOrders = () => {
     if (!isDemoMode) {
       return
@@ -519,6 +1016,7 @@ export const KdsDashboard = () => {
 
     setOrders(initialMockOrders())
     setMovingOrderIds([])
+    clearDemoSimulatorState()
     setModeNotice('Demo mode active. Simulated live kitchen activity is running locally.')
   }
 
@@ -558,6 +1056,7 @@ export const KdsDashboard = () => {
             {modeNotice}
           </div>
         )}
+
         <section className="mb-4 rounded-xl border border-slate-700 bg-slate-900/75 p-3.5 shadow-[0_4px_16px_rgba(2,6,23,0.28)]">
           <div className="flex flex-wrap items-center gap-2.5">
             <input
@@ -664,6 +1163,113 @@ export const KdsDashboard = () => {
             )}
           </div>
         </section>
+
+        {isDemoMode && (
+          <section className="mb-4 rounded-xl border border-violet-500/30 bg-violet-500/10 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-violet-200">
+                  Demo Simulator / Debug Panel
+                </h2>
+                <p className="mt-1 text-sm text-violet-100/85">
+                  Trigger realistic failures, auto-detect root cause, and run recovery playbooks.
+                </p>
+              </div>
+              <div className="rounded-lg border border-violet-400/40 bg-violet-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-violet-100">
+                Demo only
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {DEMO_SCENARIOS.map((scenario) => (
+                <button
+                  key={scenario.id}
+                  type="button"
+                  onClick={() => triggerDemoScenario(scenario.id)}
+                  className="rounded-lg border border-violet-400/40 bg-slate-900/75 px-3 py-2 text-left transition hover:border-violet-300 hover:bg-slate-900"
+                >
+                  <p className="text-sm font-semibold text-violet-100">{scenario.label}</p>
+                  <p className="mt-1 text-xs text-slate-300">{scenario.summary}</p>
+                </button>
+              ))}
+            </div>
+
+            {detectedIssue && (
+              <div className={`mt-3 rounded-lg border px-3 py-3 ${demoCategoryClass[detectedIssue.category]}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold">{detectedIssue.headline}</span>
+                  <span className="rounded-md border border-current/40 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide">
+                    {demoCategoryLabel[detectedIssue.category]}
+                  </span>
+                  {lastResolvedIssueId === detectedIssue.id && (
+                    <span className="rounded-md border border-emerald-300/45 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-100">
+                      Resolved
+                    </span>
+                  )}
+                </div>
+                <p className="mt-2 text-sm">{detectedIssue.explanation}</p>
+              </div>
+            )}
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={triggerRecoveryForCurrentIssue}
+                disabled={!detectedIssue || isRecoveryRunning}
+                className="rounded-lg border border-cyan-400/70 bg-cyan-500/20 px-3 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500"
+              >
+                Show Recovery Path
+              </button>
+              <button
+                type="button"
+                onClick={clearDetectedDemoIssue}
+                disabled={isRecoveryRunning}
+                className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:text-slate-600"
+              >
+                Clear issue
+              </button>
+              <span className="text-xs text-slate-300">
+                Delayed events: {delayedDemoEvents.length} | Signal history: {demoSignals.length}
+              </span>
+            </div>
+
+            {recoverySteps.length > 0 && (
+              <ol className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                {recoverySteps.map((step, index) => (
+                  <li key={step.id} className={`rounded-lg border px-3 py-2 ${recoveryStepClass[step.status]}`}>
+                    <p className="text-xs font-semibold uppercase tracking-wide">Step {index + 1}</p>
+                    <p className="mt-1 text-sm font-semibold">{step.title}</p>
+                    <p className="mt-1 text-xs">{step.description}</p>
+                  </li>
+                ))}
+              </ol>
+            )}
+
+            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+              <div className="rounded-lg border border-slate-700 bg-slate-900/75 px-3 py-2 text-xs text-slate-300">
+                {screenSnapshot
+                  ? `Screens diverged for #${screenSnapshot.orderId}: A=${screenSnapshot.screenA}, B=${screenSnapshot.screenB}`
+                  : 'No multi-screen divergence currently simulated.'}
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/75 px-3 py-2 text-xs text-slate-300">
+                {detectedIssue
+                  ? `Detected: ${detectedIssue.label} at ${new Date(detectedIssue.detectedAt).toLocaleTimeString()}`
+                  : 'No active simulated issue.'}
+              </div>
+            </div>
+
+            {demoSignals.length > 0 && (
+              <ul className="mt-3 space-y-1 text-xs text-slate-300">
+                {demoSignals.map((signal) => (
+                  <li key={signal.id} className="rounded border border-slate-700 bg-slate-900/70 px-2.5 py-1.5">
+                    <span className="font-semibold text-slate-100">{SCENARIO_BY_ID[signal.scenarioId].label}:</span>{' '}
+                    {signal.details}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
 
         <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
           <article className="rounded-xl border border-slate-700 bg-slate-900/75 p-4">
