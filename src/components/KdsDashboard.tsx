@@ -382,13 +382,12 @@ export const KdsDashboard = () => {
 
     const databaseNextStatus = nextStep === 'complete' ? 'delivered' : toDatabaseStatus(nextStep)
 
-    const { data: updatedRows, error: updateError } = await supabase
+    const { count: updatedCount, error: updateError } = await supabase
       .from('orders')
-      .update({ status: databaseNextStatus })
+      .update({ status: databaseNextStatus }, { count: 'exact' })
       .eq('id', orderId)
-      .select('id')
 
-    if (updateError || !updatedRows || updatedRows.length === 0) {
+    if (updateError || !updatedCount) {
       setError(
         updateError?.message ??
           'Supabase did not apply the status update. Check RLS policies for orders updates.',
