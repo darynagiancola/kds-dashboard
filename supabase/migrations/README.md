@@ -16,6 +16,7 @@ Apply these files in numeric order:
 12. `012_order_events_auditability.sql`
 13. `013_kds_transition_rpc_and_entity_event_triggers.sql`
 14. `014_order_events_reliability_hardening.sql`
+15. `015_audit_repair_event_seq_and_client_observations.sql`
 
 Then run test script:
 
