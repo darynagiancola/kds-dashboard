@@ -108,10 +108,27 @@ export const KdsDashboard = () => {
     setIsDemoMode(false)
     setModeNotice(null)
 
-    const { data, error: queryError } = await supabase
+    const canonicalSelect =
+      'id, table_number, status, created_at, order_items(id, name, modifiers:order_item_modifiers(id, text))'
+    const legacySelect = 'id, table_number, status, created_at, order_items(id, name, modifiers(id, text))'
+
+    let { data, error: queryError } = await supabase
       .from('orders')
-      .select('id, table_number, status, created_at, order_items(id, name, modifiers(id, text))')
+      .select(canonicalSelect)
       .order('created_at', { ascending: true })
+
+    if (
+      queryError &&
+      queryError.message.toLowerCase().includes('relationship') &&
+      queryError.message.includes('order_item_modifiers')
+    ) {
+      const fallbackResult = await supabase
+        .from('orders')
+        .select(legacySelect)
+        .order('created_at', { ascending: true })
+      data = fallbackResult.data
+      queryError = fallbackResult.error
+    }
 
     if (queryError) {
       setError(queryError.message)
@@ -158,7 +175,7 @@ export const KdsDashboard = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
         void fetchOrders()
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'modifiers' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_item_modifiers' }, () => {
         void fetchOrders()
       })
       .subscribe()
