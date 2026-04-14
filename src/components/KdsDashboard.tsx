@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { OrderCard } from './OrderCard'
-import { supabase } from '../lib/supabaseClient'
+import { isSupabaseConfigured, supabase } from '../lib/supabaseClient'
 import { ORDER_STATUSES, type Order, type OrderStatus } from '../types/orders'
 import { createIncomingMockOrder, initialMockOrders } from '../lib/mockOrders'
 
@@ -96,7 +96,7 @@ export const KdsDashboard = () => {
   )
 
   const fetchOrders = useCallback(async () => {
-    if (!supabase) {
+    if (!isSupabaseConfigured || !supabase) {
       setOrders(initialMockOrders())
       setIsDemoMode(true)
       setModeNotice('Demo mode active. Simulated live kitchen activity is running locally.')
@@ -146,7 +146,7 @@ export const KdsDashboard = () => {
 
   useEffect(() => {
     const supabaseClient = supabase
-    if (!supabaseClient) {
+    if (!isSupabaseConfigured || !supabaseClient) {
       return
     }
 
@@ -325,7 +325,7 @@ export const KdsDashboard = () => {
       setMovingOrderIds((current) => current.filter((id) => id !== orderId))
     }, 220)
 
-    if (!supabase) {
+    if (!isSupabaseConfigured || !supabase) {
       setTimeout(() => setUpdatingOrderId(null), 250)
       return
     }
@@ -378,7 +378,7 @@ export const KdsDashboard = () => {
               {displayTime}
             </div>
             <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300">
-              {supabase ? 'Realtime connected' : 'Demo mode'}
+              {isSupabaseConfigured ? 'Realtime connected' : 'Demo mode'}
             </div>
           </div>
         </div>
