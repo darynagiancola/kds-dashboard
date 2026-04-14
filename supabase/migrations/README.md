@@ -12,6 +12,7 @@ Apply these files in numeric order:
 8. `008_standardize_order_item_modifiers.sql`
 9. `009_kds_anon_read_policies.sql`
 10. `010_kds_anon_status_updates.sql`
+11. `011_kds_delivered_visibility_for_updates.sql`
 
 Then run test script:
 
