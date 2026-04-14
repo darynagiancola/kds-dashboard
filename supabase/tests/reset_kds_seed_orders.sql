@@ -1,25 +1,19 @@
 -- reset_kds_seed_orders.sql
--- TEST-ONLY reset script for repeatable KDS live-mode testing.
+-- TEST-ONLY reseed strategy (insert-only).
 --
--- Safety principles:
--- - does NOT disable triggers or RLS globally
--- - does NOT weaken production transition rules
--- - targets only explicit seeded IDs and test-tagged notes
--- - re-runnable (idempotent)
+-- Guarantees:
+-- - never updates old orders backward
+-- - never deletes existing orders
+-- - each run inserts a fresh KDS_TEST batch with new UUIDs
+-- - preserves production triggers, transition rules, and audit logging
 
 begin;
 
 create extension if not exists pgcrypto;
 
--- Optional audit context for event tracing in order_events.
-select set_config('kds.audit_source', 'system', true);
-select set_config('kds.correlation_id', 'kds-test-reset', true);
-
--- Fixed seed actor used only for test data.
--- Keep this stable so repeated runs are deterministic.
+-- Stable seed actor for created_by references in test data.
 with seed_constants as (
-  select
-    '11111111-1111-4111-8111-111111111111'::uuid as seed_user_id
+  select '11111111-1111-4111-8111-111111111111'::uuid as seed_user_id
 )
 insert into auth.users (
   id,
@@ -46,13 +40,10 @@ select
   now()
 from seed_constants
 on conflict (id) do update
-set
-  email = excluded.email,
-  updated_at = now();
+set updated_at = now();
 
 with seed_constants as (
-  select
-    '11111111-1111-4111-8111-111111111111'::uuid as seed_user_id
+  select '11111111-1111-4111-8111-111111111111'::uuid as seed_user_id
 )
 insert into public.profiles (id, full_name, role, is_active)
 select
@@ -68,87 +59,141 @@ set
   is_active = excluded.is_active,
   updated_at = now();
 
--- Remove only prior seeded/test orders.
--- Child rows are removed automatically via ON DELETE CASCADE.
-delete from public.orders
-where id in (
-  '20000000-0000-4000-8000-000000000001'::uuid,
-  '20000000-0000-4000-8000-000000000002'::uuid,
-  '20000000-0000-4000-8000-000000000003'::uuid
-)
-or note like '[KDS_TEST]%';
-
--- Reinsert baseline test orders in each active board status.
-insert into public.orders (
-  id,
-  table_number,
-  status,
-  priority,
-  created_by,
-  note,
-  created_at,
-  updated_at
-)
-values
-  (
-    '20000000-0000-4000-8000-000000000001'::uuid,
-    12,
-    'new',
-    'rush',
+with
+run_context as (
+  select
+    now() as run_at,
+    left(replace(gen_random_uuid()::text, '-', ''), 12) as batch_tag
+),
+order_blueprint as (
+  select *
+  from (
+    values
+      (1, 12, 'new'::public.order_status, 'rush'::public.order_priority, 'Allergy note: no peanuts', interval '4 minutes'),
+      (2, 5, 'in_progress'::public.order_status, 'high'::public.order_priority, 'Fire mains first', interval '12 minutes'),
+      (3, 9, 'ready'::public.order_status, 'normal'::public.order_priority, 'Ready for pickup', interval '18 minutes')
+  ) as v(slot_no, table_number, status, priority, note_suffix, age_offset)
+),
+inserted_orders as (
+  insert into public.orders (
+    id,
+    table_number,
+    status,
+    priority,
+    created_by,
+    note,
+    created_at,
+    updated_at
+  )
+  select
+    gen_random_uuid(),
+    ob.table_number,
+    ob.status,
+    ob.priority,
     '11111111-1111-4111-8111-111111111111'::uuid,
-    '[KDS_TEST] Allergy note: no peanuts',
-    now() - interval '4 minutes',
-    now() - interval '4 minutes'
-  ),
-  (
-    '20000000-0000-4000-8000-000000000002'::uuid,
-    5,
-    'in_progress',
-    'high',
-    '11111111-1111-4111-8111-111111111111'::uuid,
-    '[KDS_TEST] Fire mains first',
-    now() - interval '12 minutes',
-    now() - interval '10 minutes'
-  ),
-  (
-    '20000000-0000-4000-8000-000000000003'::uuid,
-    9,
-    'ready',
-    'normal',
-    '11111111-1111-4111-8111-111111111111'::uuid,
-    '[KDS_TEST] Ready for pickup',
-    now() - interval '18 minutes',
-    now() - interval '3 minutes'
-  );
-
-insert into public.order_items (
-  id,
-  order_id,
-  name,
-  quantity,
-  notes,
-  created_at,
-  updated_at
+    format(
+      '[KDS_TEST][batch:%s][slot:%s] %s',
+      rc.batch_tag,
+      ob.slot_no,
+      ob.note_suffix
+    ),
+    rc.run_at - ob.age_offset,
+    rc.run_at - ob.age_offset
+  from order_blueprint ob
+  cross join run_context rc
+  returning id, note
+),
+order_map as (
+  select
+    io.id as order_id,
+    substring(io.note from '\[slot:([0-9]+)\]')::integer as slot_no
+  from inserted_orders io
+),
+item_blueprint as (
+  select *
+  from (
+    values
+      (1, 'o1i1', 'Smash Burger', 1, null::text, interval '4 minutes'),
+      (1, 'o1i2', 'Fries', 1, null::text, interval '4 minutes'),
+      (2, 'o2i1', 'Chicken Caesar Salad', 1, null::text, interval '12 minutes'),
+      (2, 'o2i2', 'Tomato Soup', 1, null::text, interval '12 minutes'),
+      (3, 'o3i1', 'Ribeye Steak', 1, null::text, interval '18 minutes'),
+      (3, 'o3i2', 'Mashed Potatoes', 1, null::text, interval '18 minutes')
+  ) as v(slot_no, item_key, name, quantity, notes, age_offset)
+),
+inserted_items as (
+  insert into public.order_items (
+    id,
+    order_id,
+    name,
+    quantity,
+    notes,
+    created_at,
+    updated_at
+  )
+  select
+    gen_random_uuid(),
+    om.order_id,
+    ib.name,
+    ib.quantity,
+    ib.notes,
+    rc.run_at - ib.age_offset,
+    rc.run_at - ib.age_offset
+  from item_blueprint ib
+  join order_map om on om.slot_no = ib.slot_no
+  cross join run_context rc
+  returning id, order_id, name, quantity, notes
+),
+item_map as (
+  select
+    ii.id as order_item_id,
+    ib.item_key
+  from inserted_items ii
+  join order_map om on om.order_id = ii.order_id
+  join item_blueprint ib
+    on ib.slot_no = om.slot_no
+   and ib.name = ii.name
+   and ib.quantity = ii.quantity
+   and coalesce(ib.notes, '') = coalesce(ii.notes, '')
+),
+modifier_blueprint as (
+  select *
+  from (
+    values
+      ('o1i1', 'well done', interval '4 minutes'),
+      ('o1i1', 'no onion', interval '4 minutes'),
+      ('o1i2', 'extra crispy', interval '4 minutes'),
+      ('o2i1', 'dressing on side', interval '12 minutes'),
+      ('o2i2', 'extra hot', interval '12 minutes'),
+      ('o3i1', 'medium rare', interval '18 minutes'),
+      ('o3i1', 'sauce on side', interval '18 minutes')
+  ) as v(item_key, text, age_offset)
+),
+inserted_modifiers as (
+  insert into public.order_item_modifiers (
+    id,
+    order_item_id,
+    text,
+    created_at
+  )
+  select
+    gen_random_uuid(),
+    im.order_item_id,
+    mb.text,
+    rc.run_at - mb.age_offset
+  from modifier_blueprint mb
+  join item_map im on im.item_key = mb.item_key
+  cross join run_context rc
+  returning id
 )
-values
-  ('30000000-0000-4000-8000-000000000001'::uuid, '20000000-0000-4000-8000-000000000001'::uuid, 'Smash Burger', 1, null, now() - interval '4 minutes', now() - interval '4 minutes'),
-  ('30000000-0000-4000-8000-000000000002'::uuid, '20000000-0000-4000-8000-000000000001'::uuid, 'Fries', 1, null, now() - interval '4 minutes', now() - interval '4 minutes'),
-  ('30000000-0000-4000-8000-000000000003'::uuid, '20000000-0000-4000-8000-000000000002'::uuid, 'Chicken Caesar Salad', 1, null, now() - interval '12 minutes', now() - interval '10 minutes'),
-  ('30000000-0000-4000-8000-000000000004'::uuid, '20000000-0000-4000-8000-000000000002'::uuid, 'Tomato Soup', 1, null, now() - interval '12 minutes', now() - interval '10 minutes'),
-  ('30000000-0000-4000-8000-000000000005'::uuid, '20000000-0000-4000-8000-000000000003'::uuid, 'Ribeye Steak', 1, null, now() - interval '18 minutes', now() - interval '3 minutes'),
-  ('30000000-0000-4000-8000-000000000006'::uuid, '20000000-0000-4000-8000-000000000003'::uuid, 'Mashed Potatoes', 1, null, now() - interval '18 minutes', now() - interval '3 minutes');
-
-insert into public.order_item_modifiers (id, order_item_id, text, created_at)
-values
-  ('40000000-0000-4000-8000-000000000001'::uuid, '30000000-0000-4000-8000-000000000001'::uuid, 'well done', now() - interval '4 minutes'),
-  ('40000000-0000-4000-8000-000000000002'::uuid, '30000000-0000-4000-8000-000000000001'::uuid, 'no onion', now() - interval '4 minutes'),
-  ('40000000-0000-4000-8000-000000000003'::uuid, '30000000-0000-4000-8000-000000000002'::uuid, 'extra crispy', now() - interval '4 minutes'),
-  ('40000000-0000-4000-8000-000000000004'::uuid, '30000000-0000-4000-8000-000000000003'::uuid, 'dressing on side', now() - interval '12 minutes'),
-  ('40000000-0000-4000-8000-000000000005'::uuid, '30000000-0000-4000-8000-000000000004'::uuid, 'extra hot', now() - interval '12 minutes'),
-  ('40000000-0000-4000-8000-000000000006'::uuid, '30000000-0000-4000-8000-000000000005'::uuid, 'medium rare', now() - interval '18 minutes'),
-  ('40000000-0000-4000-8000-000000000007'::uuid, '30000000-0000-4000-8000-000000000005'::uuid, 'sauce on side', now() - interval '18 minutes');
+select
+  rc.batch_tag as inserted_batch_tag,
+  (select count(*) from inserted_orders) as orders_inserted,
+  (select count(*) from inserted_items) as order_items_inserted,
+  (select count(*) from inserted_modifiers) as modifiers_inserted
+from run_context rc;
 
 commit;
 
 -- Optional quick verification:
--- select status, count(*) from public.orders where note like '[KDS_TEST]%' group by status order by status;
+-- select status, count(*) from public.orders where note like '[KDS_TEST]%' and status in ('new', 'in_progress', 'ready') group by status order by status;
