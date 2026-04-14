@@ -15,6 +15,7 @@ Apply these files in numeric order:
 11. `011_kds_delivered_visibility_for_updates.sql`
 12. `012_order_events_auditability.sql`
 13. `013_kds_transition_rpc_and_entity_event_triggers.sql`
+14. `014_order_events_reliability_hardening.sql`
 
 Then run test script:
 
