@@ -410,7 +410,9 @@ export const KdsDashboard = () => {
       .update({ status: databaseNextStatus }, { count: 'exact' })
       .eq('id', orderId)
 
-    if (updateError || !updatedCount) {
+    const updateSucceeded = nextStep === 'complete' ? !updateError : !updateError && Boolean(updatedCount)
+
+    if (!updateSucceeded) {
       setError(
         updateError?.message ??
           'Supabase did not apply the status update. Check RLS policies for orders updates.',
@@ -434,6 +436,11 @@ export const KdsDashboard = () => {
       window.setTimeout(() => {
         setMovingOrderIds((current) => current.filter((id) => id !== orderId))
       }, 220)
+      if (nextStep === 'complete') {
+        window.setTimeout(() => {
+          void fetchOrders()
+        }, 300)
+      }
     }
 
     setUpdatingOrderId(null)
