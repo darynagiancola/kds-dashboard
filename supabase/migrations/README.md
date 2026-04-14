@@ -11,6 +11,7 @@ Apply these files in numeric order:
 7. `007_audit_logs.sql`
 8. `008_standardize_order_item_modifiers.sql`
 9. `009_kds_anon_read_policies.sql`
+10. `010_kds_anon_status_updates.sql`
 
 Then run test script:
 
