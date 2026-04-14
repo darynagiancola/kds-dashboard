@@ -24,6 +24,7 @@ type OrderRow = {
 
 type SortMode = 'oldest' | 'newest' | 'priority'
 type DensityMode = 'comfortable' | 'compact'
+type DataMode = 'demo' | 'live'
 
 const LATE_ORDER_MINUTES = 15
 
@@ -93,19 +94,22 @@ const EMPTY_COLUMN_TEXT: Record<OrderStatus, string> = {
 }
 
 export const KdsDashboard = () => {
+  const liveModeAvailable = isSupabaseConfigured && Boolean(supabase)
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [modeNotice, setModeNotice] = useState<string | null>(null)
   const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
-  const [isDemoMode, setIsDemoMode] = useState(false)
+  const [dataMode, setDataMode] = useState<DataMode>(liveModeAvailable ? 'live' : 'demo')
+  const [isDemoMode, setIsDemoMode] = useState(!liveModeAvailable)
   const [movingOrderIds, setMovingOrderIds] = useState<number[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [showLateOnly, setShowLateOnly] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [sortMode, setSortMode] = useState<SortMode>('oldest')
   const [densityMode, setDensityMode] = useState<DensityMode>('comfortable')
+  const activeMode: DataMode = liveModeAvailable ? dataMode : 'demo'
 
   const getAgeMinutes = useCallback(
     (createdAt: string) => Math.max(0, Math.floor((nowMs - Date.parse(createdAt)) / 60_000)),
@@ -118,7 +122,7 @@ export const KdsDashboard = () => {
   )
 
   const fetchOrders = useCallback(async () => {
-    if (!isSupabaseConfigured || !supabase) {
+    if (activeMode === 'demo' || !supabase) {
       setOrders(initialMockOrders())
       setIsDemoMode(true)
       setModeNotice('Demo mode active. Simulated live kitchen activity is running locally.')
@@ -128,7 +132,7 @@ export const KdsDashboard = () => {
     }
 
     setIsDemoMode(false)
-    setModeNotice(null)
+    setModeNotice('Live mode active. Orders are synced with Supabase.')
 
     const canonicalSelect =
       'id, table_number, status, created_at, order_items(id, name, modifiers:order_item_modifiers(id, text))'
@@ -178,7 +182,7 @@ export const KdsDashboard = () => {
       setError(null)
     }
     setLoading(false)
-  }, [])
+  }, [activeMode])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -196,7 +200,7 @@ export const KdsDashboard = () => {
 
   useEffect(() => {
     const supabaseClient = supabase
-    if (!isSupabaseConfigured || !supabaseClient) {
+    if (activeMode !== 'live' || !supabaseClient) {
       return
     }
 
@@ -216,7 +220,7 @@ export const KdsDashboard = () => {
     return () => {
       void supabaseClient.removeChannel(channel)
     }
-  }, [fetchOrders])
+  }, [fetchOrders, activeMode])
 
   useEffect(() => {
     if (!isDemoMode) {
@@ -353,13 +357,32 @@ export const KdsDashboard = () => {
     }
   }, [visibleOrders, groupedOrders.ready.length, isLateOrder, getAgeMinutes])
 
+  const handleModeChange = (nextMode: DataMode) => {
+    if (nextMode === dataMode) {
+      return
+    }
+
+    if (nextMode === 'live' && !liveModeAvailable) {
+      setError('Live mode is unavailable. Add Supabase environment variables to enable it.')
+      return
+    }
+
+    setLoading(true)
+    setOrders([])
+    setMovingOrderIds([])
+    setUpdatingOrderId(null)
+    setIsDemoMode(nextMode === 'demo')
+    setError(null)
+    setDataMode(nextMode)
+  }
+
   const handleMoveOrder = async (orderId: number, currentStatus: OrderStatus) => {
     const nextStep: OrderStatus | 'complete' =
       currentStatus === 'new' ? 'prep' : currentStatus === 'prep' ? 'ready' : 'complete'
 
     setUpdatingOrderId(orderId)
 
-    if (!isSupabaseConfigured || !supabase) {
+    if (activeMode === 'demo' || !supabase) {
       setMovingOrderIds((current) => (current.includes(orderId) ? current : [...current, orderId]))
       setOrders((current) =>
         nextStep === 'complete'
@@ -449,7 +472,7 @@ export const KdsDashboard = () => {
               {displayTime}
             </div>
             <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-300">
-              {isSupabaseConfigured ? 'Realtime connected' : 'Demo mode'}
+              {activeMode === 'live' ? 'Realtime connected' : 'Demo mode'}
             </div>
           </div>
         </div>
@@ -505,6 +528,32 @@ export const KdsDashboard = () => {
               <option value="newest">Newest first</option>
               <option value="priority">Priority first</option>
             </select>
+
+            <div className="inline-flex rounded-lg border border-slate-600 bg-slate-950 p-1">
+              <button
+                type="button"
+                onClick={() => handleModeChange('demo')}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition ${
+                  activeMode === 'demo'
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Demo
+              </button>
+              <button
+                type="button"
+                onClick={() => handleModeChange('live')}
+                disabled={!liveModeAvailable}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition disabled:cursor-not-allowed disabled:text-slate-600 ${
+                  activeMode === 'live'
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Live
+              </button>
+            </div>
 
             <div className="inline-flex rounded-lg border border-slate-600 bg-slate-950 p-1">
               <button
