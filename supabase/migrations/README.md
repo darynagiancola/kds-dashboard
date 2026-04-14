@@ -23,6 +23,7 @@ Then run test script:
 
 - `../tests/rls_verification_queries.sql`
 - `../tests/order_events_debug_queries.sql`
+- `../tests/reset_kds_seed_orders.sql` (test-only reset/reseed utility)
 
 ## Notes
 
