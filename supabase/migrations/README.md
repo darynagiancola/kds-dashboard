@@ -13,10 +13,13 @@ Apply these files in numeric order:
 9. `009_kds_anon_read_policies.sql`
 10. `010_kds_anon_status_updates.sql`
 11. `011_kds_delivered_visibility_for_updates.sql`
+12. `012_order_events_auditability.sql`
+13. `013_kds_transition_rpc_and_entity_event_triggers.sql`
 
 Then run test script:
 
 - `../tests/rls_verification_queries.sql`
+- `../tests/order_events_debug_queries.sql`
 
 ## Notes
 
