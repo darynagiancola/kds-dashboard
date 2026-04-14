@@ -352,7 +352,6 @@ export const KdsDashboard = () => {
 
     setOrders(initialMockOrders())
     setMovingOrderIds([])
-    setUpdatingOrderId(null)
     setModeNotice('Demo mode active. Simulated live kitchen activity is running locally.')
   }
 
@@ -392,7 +391,6 @@ export const KdsDashboard = () => {
             {modeNotice}
           </div>
         )}
-
         <section className="mb-4 rounded-xl border border-slate-700 bg-slate-900/75 p-3.5 shadow-[0_4px_16px_rgba(2,6,23,0.28)]">
           <div className="flex flex-wrap items-center gap-2.5">
             <input
