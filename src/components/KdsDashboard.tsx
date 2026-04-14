@@ -134,7 +134,6 @@ export const KdsDashboard = () => {
   const [sortMode, setSortMode] = useState<SortMode>('oldest')
   const [densityMode, setDensityMode] = useState<DensityMode>('comfortable')
   const activeMode: DataMode = liveModeAvailable ? dataMode : 'demo'
-
   const showPersistentError = useCallback((message: string) => {
     setError(message)
     setErrorVisibleUntil(Date.now() + ERROR_PERSIST_MS)
