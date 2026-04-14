@@ -74,6 +74,7 @@ export const KdsDashboard = () => {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [modeNotice, setModeNotice] = useState<string | null>(null)
   const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [isDemoMode, setIsDemoMode] = useState(false)
@@ -98,10 +99,14 @@ export const KdsDashboard = () => {
     if (!supabase) {
       setOrders(initialMockOrders())
       setIsDemoMode(true)
-      setError('Missing Supabase credentials. Running in demo mode with sample kitchen orders.')
+      setModeNotice('Demo mode active. Simulated live kitchen activity is running locally.')
+      setError(null)
       setLoading(false)
       return
     }
+
+    setIsDemoMode(false)
+    setModeNotice(null)
 
     const { data, error: queryError } = await supabase
       .from('orders')
@@ -120,7 +125,6 @@ export const KdsDashboard = () => {
         })),
       }))
       setOrders(parsedOrders)
-      setIsDemoMode(false)
       setError(null)
     }
     setLoading(false)
@@ -171,10 +175,67 @@ export const KdsDashboard = () => {
 
     const timer = window.setInterval(() => {
       setOrders((current) => [createIncomingMockOrder(), ...current].slice(0, 18))
-    }, 45_000)
+    }, 35_000)
 
     return () => window.clearInterval(timer)
   }, [isDemoMode])
+
+  useEffect(() => {
+    if (!isDemoMode) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      if (updatingOrderId !== null) {
+        return
+      }
+
+      setOrders((current) => {
+        if (current.length === 0) {
+          return current
+        }
+
+        const oldestFirst = [...current].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+        const readyCandidate = oldestFirst.find((order) => order.status === 'ready')
+        const prepCandidate = oldestFirst.find((order) => order.status === 'prep')
+        const newCandidate = oldestFirst.find((order) => order.status === 'new')
+
+        if (readyCandidate && Math.random() < 0.35) {
+          return current.filter((order) => order.id !== readyCandidate.id)
+        }
+
+        if (prepCandidate) {
+          return current.map((order) =>
+            order.id === prepCandidate.id
+              ? {
+                  ...order,
+                  status: 'ready',
+                }
+              : order,
+          )
+        }
+
+        if (newCandidate) {
+          return current.map((order) =>
+            order.id === newCandidate.id
+              ? {
+                  ...order,
+                  status: 'prep',
+                }
+              : order,
+          )
+        }
+
+        if (readyCandidate) {
+          return current.filter((order) => order.id !== readyCandidate.id)
+        }
+
+        return current
+      })
+    }, 22_000)
+
+    return () => window.clearInterval(timer)
+  }, [isDemoMode, updatingOrderId])
 
   const groupedOrders = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase()
@@ -292,6 +353,7 @@ export const KdsDashboard = () => {
     setOrders(initialMockOrders())
     setMovingOrderIds([])
     setUpdatingOrderId(null)
+    setModeNotice('Demo mode active. Simulated live kitchen activity is running locally.')
   }
 
   const displayTime = useMemo(
@@ -324,6 +386,13 @@ export const KdsDashboard = () => {
       </header>
 
       <div className="p-4 md:p-5">
+        {modeNotice && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm font-medium text-sky-100">
+            <span className="h-2 w-2 rounded-full bg-sky-300" />
+            {modeNotice}
+          </div>
+        )}
+
         <section className="mb-4 rounded-xl border border-slate-700 bg-slate-900/75 p-3.5 shadow-[0_4px_16px_rgba(2,6,23,0.28)]">
           <div className="flex flex-wrap items-center gap-2.5">
             <input
