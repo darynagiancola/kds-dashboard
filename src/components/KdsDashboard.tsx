@@ -27,6 +27,7 @@ type DensityMode = 'comfortable' | 'compact'
 type DataMode = 'demo' | 'live'
 
 const LATE_ORDER_MINUTES = 15
+const ERROR_PERSIST_MS = 10_000
 
 const priorityRank: Record<NonNullable<Order['priority']>, number> = {
   rush: 0,
@@ -52,6 +53,28 @@ const toDatabaseStatus = (status: OrderStatus): 'new' | 'in_progress' | 'ready' 
     return 'in_progress'
   }
   return status
+}
+
+const formatSupabaseErrorMessage = (
+  error: { message?: string; details?: string | null; hint?: string | null; code?: string | null } | null,
+  fallback: string,
+) => {
+  if (!error) {
+    return fallback
+  }
+
+  const parts = [error.message]
+  if (error.details) {
+    parts.push(`Details: ${error.details}`)
+  }
+  if (error.hint) {
+    parts.push(`Hint: ${error.hint}`)
+  }
+  if (error.code) {
+    parts.push(`Code: ${error.code}`)
+  }
+
+  return parts.filter(Boolean).join(' | ')
 }
 
 const columnMeta: Record<
@@ -98,6 +121,7 @@ export const KdsDashboard = () => {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [errorVisibleUntil, setErrorVisibleUntil] = useState(0)
   const [modeNotice, setModeNotice] = useState<string | null>(null)
   const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -110,6 +134,19 @@ export const KdsDashboard = () => {
   const [sortMode, setSortMode] = useState<SortMode>('oldest')
   const [densityMode, setDensityMode] = useState<DensityMode>('comfortable')
   const activeMode: DataMode = liveModeAvailable ? dataMode : 'demo'
+  const showPersistentError = useCallback((message: string) => {
+    setError(message)
+    setErrorVisibleUntil(Date.now() + ERROR_PERSIST_MS)
+  }, [])
+
+  const clearErrorIfExpired = useCallback(() => {
+    setError((current) => {
+      if (!current) {
+        return current
+      }
+      return Date.now() >= errorVisibleUntil ? null : current
+    })
+  }, [errorVisibleUntil])
 
   const getAgeMinutes = useCallback(
     (createdAt: string) => Math.max(0, Math.floor((nowMs - Date.parse(createdAt)) / 60_000)),
@@ -126,7 +163,7 @@ export const KdsDashboard = () => {
       setOrders(initialMockOrders())
       setIsDemoMode(true)
       setModeNotice('Demo mode active. Simulated live kitchen activity is running locally.')
-      setError(null)
+      clearErrorIfExpired()
       setLoading(false)
       return
     }
@@ -179,10 +216,10 @@ export const KdsDashboard = () => {
         .filter((order): order is Order => order !== null)
 
       setOrders(parsedOrders)
-      setError(null)
+      clearErrorIfExpired()
     }
     setLoading(false)
-  }, [activeMode])
+  }, [activeMode, clearErrorIfExpired])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -190,6 +227,28 @@ export const KdsDashboard = () => {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [fetchOrders])
+
+  useEffect(() => {
+    if (!error) {
+      return
+    }
+
+    const remainingMs = errorVisibleUntil - Date.now()
+    if (remainingMs <= 0) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setError((current) => {
+        if (!current) {
+          return current
+        }
+        return Date.now() >= errorVisibleUntil ? null : current
+      })
+    }, remainingMs)
+
+    return () => window.clearTimeout(timer)
+  }, [error, errorVisibleUntil])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -372,7 +431,7 @@ export const KdsDashboard = () => {
     setMovingOrderIds([])
     setUpdatingOrderId(null)
     setIsDemoMode(nextMode === 'demo')
-    setError(null)
+    clearErrorIfExpired()
     setDataMode(nextMode)
   }
 
@@ -413,13 +472,20 @@ export const KdsDashboard = () => {
     const updateSucceeded = nextStep === 'complete' ? !updateError : !updateError && Boolean(updatedCount)
 
     if (!updateSucceeded) {
-      setError(
-        updateError?.message ??
-          'Supabase did not apply the status update. Check RLS policies for orders updates.',
-      )
+      const fallbackError = 'Supabase did not apply the status update. Check RLS policies for orders updates.'
+      const readableError = formatSupabaseErrorMessage(updateError, fallbackError)
+      console.error('KDS status update failed', {
+        orderId,
+        currentStatus,
+        nextStep,
+        databaseNextStatus,
+        updatedCount,
+        supabaseError: updateError,
+      })
+      showPersistentError(readableError)
       void fetchOrders()
     } else {
-      setError(null)
+      clearErrorIfExpired()
       setMovingOrderIds((current) => (current.includes(orderId) ? current : [...current, orderId]))
       setOrders((current) =>
         nextStep === 'complete'
