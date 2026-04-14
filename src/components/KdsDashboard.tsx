@@ -357,42 +357,61 @@ export const KdsDashboard = () => {
     const nextStep: OrderStatus | 'complete' =
       currentStatus === 'new' ? 'prep' : currentStatus === 'prep' ? 'ready' : 'complete'
 
-    setMovingOrderIds((current) => (current.includes(orderId) ? current : [...current, orderId]))
     setUpdatingOrderId(orderId)
-    setOrders((current) =>
-      nextStep === 'complete'
-        ? current.filter((order) => order.id !== orderId)
-        : current.map((order) =>
-            order.id === orderId
-              ? {
-                  ...order,
-                  status: nextStep,
-                }
-              : order,
-          ),
-    )
-    window.setTimeout(() => {
-      setMovingOrderIds((current) => current.filter((id) => id !== orderId))
-    }, 220)
 
     if (!isSupabaseConfigured || !supabase) {
+      setMovingOrderIds((current) => (current.includes(orderId) ? current : [...current, orderId]))
+      setOrders((current) =>
+        nextStep === 'complete'
+          ? current.filter((order) => order.id !== orderId)
+          : current.map((order) =>
+              order.id === orderId
+                ? {
+                    ...order,
+                    status: nextStep,
+                  }
+                : order,
+            ),
+      )
+      window.setTimeout(() => {
+        setMovingOrderIds((current) => current.filter((id) => id !== orderId))
+      }, 220)
       setTimeout(() => setUpdatingOrderId(null), 250)
       return
     }
 
-    const { error: updateError } =
-      nextStep === 'complete'
-        ? await supabase.from('orders').delete().eq('id', orderId)
-        : await supabase
-            .from('orders')
-            .update({ status: toDatabaseStatus(nextStep) })
-            .eq('id', orderId)
+    const databaseNextStatus = nextStep === 'complete' ? 'delivered' : toDatabaseStatus(nextStep)
 
-    if (updateError) {
-      setError(updateError.message)
+    const { data: updatedRows, error: updateError } = await supabase
+      .from('orders')
+      .update({ status: databaseNextStatus })
+      .eq('id', orderId)
+      .select('id')
+
+    if (updateError || !updatedRows || updatedRows.length === 0) {
+      setError(
+        updateError?.message ??
+          'Supabase did not apply the status update. Check RLS policies for orders updates.',
+      )
       void fetchOrders()
     } else {
       setError(null)
+      setMovingOrderIds((current) => (current.includes(orderId) ? current : [...current, orderId]))
+      setOrders((current) =>
+        nextStep === 'complete'
+          ? current.filter((order) => order.id !== orderId)
+          : current.map((order) =>
+              order.id === orderId
+                ? {
+                    ...order,
+                    status: nextStep,
+                  }
+                : order,
+            ),
+      )
+      window.setTimeout(() => {
+        setMovingOrderIds((current) => current.filter((id) => id !== orderId))
+      }, 220)
     }
 
     setUpdatingOrderId(null)
