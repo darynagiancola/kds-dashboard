@@ -20,6 +20,17 @@ type OrderRow = {
   }[]
 }
 
+type SortMode = 'oldest' | 'newest' | 'priority'
+type DensityMode = 'comfortable' | 'compact'
+
+const LATE_ORDER_MINUTES = 15
+
+const priorityRank: Record<NonNullable<Order['priority']>, number> = {
+  rush: 0,
+  high: 1,
+  normal: 2,
+}
+
 const columnMeta: Record<
   OrderStatus,
   {
@@ -67,6 +78,21 @@ export const KdsDashboard = () => {
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [isDemoMode, setIsDemoMode] = useState(false)
   const [movingOrderIds, setMovingOrderIds] = useState<number[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [showLateOnly, setShowLateOnly] = useState(false)
+  const [soundEnabled, setSoundEnabled] = useState(true)
+  const [sortMode, setSortMode] = useState<SortMode>('oldest')
+  const [densityMode, setDensityMode] = useState<DensityMode>('comfortable')
+
+  const getAgeMinutes = useCallback(
+    (createdAt: string) => Math.max(0, Math.floor((nowMs - Date.parse(createdAt)) / 60_000)),
+    [nowMs],
+  )
+
+  const isLateOrder = useCallback(
+    (order: Order) => getAgeMinutes(order.created_at) >= LATE_ORDER_MINUTES,
+    [getAgeMinutes],
+  )
 
   const fetchOrders = useCallback(async () => {
     if (!supabase) {
@@ -151,20 +177,76 @@ export const KdsDashboard = () => {
   }, [isDemoMode])
 
   const groupedOrders = useMemo(() => {
-    return ORDER_STATUSES.reduce<Record<OrderStatus, Order[]>>(
-      (acc, status) => {
-        acc[status] = orders.filter((order) => order.status === status)
+    const normalizedQuery = searchQuery.trim().toLowerCase()
+
+    const filteredOrders = orders.filter((order) => {
+      if (showLateOnly && !isLateOrder(order)) {
+        return false
+      }
+
+      if (normalizedQuery.length === 0) {
+        return true
+      }
+
+      if (String(order.id).includes(normalizedQuery)) {
+        return true
+      }
+
+      return order.order_items.some((item) => {
+        if (item.name.toLowerCase().includes(normalizedQuery)) {
+          return true
+        }
+
+        return item.modifiers.some((modifier) => modifier.text.toLowerCase().includes(normalizedQuery))
+      })
+    })
+
+    const sortedOrders = [...filteredOrders].sort((a, b) => {
+      if (sortMode === 'newest') {
+        return Date.parse(b.created_at) - Date.parse(a.created_at)
+      }
+
+      if (sortMode === 'priority') {
+        const priorityDifference = priorityRank[a.priority] - priorityRank[b.priority]
+        if (priorityDifference !== 0) {
+          return priorityDifference
+        }
+      }
+
+      return Date.parse(a.created_at) - Date.parse(b.created_at)
+    })
+
+    return sortedOrders.reduce<Record<OrderStatus, Order[]>>(
+      (acc, order) => {
+        acc[order.status].push(order)
         return acc
       },
       { new: [], prep: [], ready: [] },
     )
-  }, [orders])
+  }, [orders, searchQuery, showLateOnly, sortMode, isLateOrder])
+
+  const visibleOrders = useMemo(() => ORDER_STATUSES.flatMap((status) => groupedOrders[status]), [groupedOrders])
+
+  const metrics = useMemo(() => {
+    const activeOrders = visibleOrders.length
+    const lateOrders = visibleOrders.filter(isLateOrder).length
+    const totalMinutes = visibleOrders.reduce((total, order) => total + getAgeMinutes(order.created_at), 0)
+    const avgWait = activeOrders === 0 ? 0 : Math.round(totalMinutes / activeOrders)
+    const readyToServe = groupedOrders.ready.length
+
+    return {
+      activeOrders,
+      lateOrders,
+      avgWait,
+      readyToServe,
+    }
+  }, [visibleOrders, groupedOrders.ready.length, isLateOrder, getAgeMinutes])
 
   const handleMoveOrder = async (orderId: number, currentStatus: OrderStatus) => {
     const nextStep: OrderStatus | 'complete' =
       currentStatus === 'new' ? 'prep' : currentStatus === 'prep' ? 'ready' : 'complete'
 
-    setMovingOrderIds((current) => [...current, orderId])
+    setMovingOrderIds((current) => (current.includes(orderId) ? current : [...current, orderId]))
     setUpdatingOrderId(orderId)
     setOrders((current) =>
       nextStep === 'complete'
@@ -202,6 +284,16 @@ export const KdsDashboard = () => {
     setUpdatingOrderId(null)
   }
 
+  const resetDemoOrders = () => {
+    if (!isDemoMode) {
+      return
+    }
+
+    setOrders(initialMockOrders())
+    setMovingOrderIds([])
+    setUpdatingOrderId(null)
+  }
+
   const displayTime = useMemo(
     () =>
       new Intl.DateTimeFormat([], {
@@ -232,8 +324,114 @@ export const KdsDashboard = () => {
       </header>
 
       <div className="p-4 md:p-5">
+        <section className="mb-4 rounded-xl border border-slate-700 bg-slate-900/75 p-3.5 shadow-[0_4px_16px_rgba(2,6,23,0.28)]">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search order #, item, modifier"
+              className="min-w-[220px] flex-1 rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm font-medium text-slate-100 outline-none transition focus:border-cyan-400"
+            />
+
+            <button
+              type="button"
+              onClick={() => setShowLateOnly((current) => !current)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+                showLateOnly
+                  ? 'border-rose-400/70 bg-rose-500/20 text-rose-100'
+                  : 'border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700'
+              }`}
+            >
+              Late only
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSoundEnabled((current) => !current)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold transition ${
+                soundEnabled
+                  ? 'border-emerald-400/70 bg-emerald-500/20 text-emerald-100'
+                  : 'border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700'
+              }`}
+            >
+              Sound {soundEnabled ? 'On' : 'Off'}
+            </button>
+
+            <select
+              value={sortMode}
+              onChange={(event) => setSortMode(event.target.value as SortMode)}
+              className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm font-semibold text-slate-100 outline-none transition focus:border-cyan-400"
+            >
+              <option value="oldest">Oldest first</option>
+              <option value="newest">Newest first</option>
+              <option value="priority">Priority first</option>
+            </select>
+
+            <div className="inline-flex rounded-lg border border-slate-600 bg-slate-950 p-1">
+              <button
+                type="button"
+                onClick={() => setDensityMode('comfortable')}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition ${
+                  densityMode === 'comfortable'
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Comfortable
+              </button>
+              <button
+                type="button"
+                onClick={() => setDensityMode('compact')}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition ${
+                  densityMode === 'compact'
+                    ? 'bg-slate-700 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Compact
+              </button>
+            </div>
+
+            {isDemoMode && (
+              <button
+                type="button"
+                onClick={resetDemoOrders}
+                className="rounded-lg border border-indigo-400/70 bg-indigo-500/20 px-3 py-2 text-sm font-semibold text-indigo-100 transition hover:bg-indigo-500/30"
+              >
+                Reset demo
+              </button>
+            )}
+          </div>
+        </section>
+
+        <section className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <article className="rounded-xl border border-slate-700 bg-slate-900/75 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Active orders</p>
+            <p className="mt-2 text-3xl font-black text-slate-100">{metrics.activeOrders}</p>
+          </article>
+          <article className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-rose-200/90">Late orders</p>
+            <p className="mt-2 text-3xl font-black text-rose-100">{metrics.lateOrders}</p>
+          </article>
+          <article className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-200/90">Average wait time</p>
+            <p className="mt-2 text-3xl font-black text-amber-100">{metrics.avgWait}m</p>
+          </article>
+          <article className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200/90">Ready to serve</p>
+            <p className="mt-2 text-3xl font-black text-emerald-100">{metrics.readyToServe}</p>
+          </article>
+        </section>
+
         {error && (
-          <div className="mb-4 rounded-xl border border-rose-500/50 bg-rose-500/15 px-4 py-3 text-sm font-medium text-rose-100">
+          <div
+            className={`mb-4 rounded-xl border px-4 py-3 text-sm font-medium ${
+              isDemoMode
+                ? 'border-amber-500/60 bg-amber-500/15 text-amber-100'
+                : 'border-rose-500/60 bg-rose-500/15 text-rose-100'
+            }`}
+          >
             {error}
           </div>
         )}
@@ -261,7 +459,7 @@ export const KdsDashboard = () => {
                     </span>
                   </header>
 
-                  <div className="space-y-3">
+                  <div className={densityMode === 'compact' ? 'space-y-2' : 'space-y-3'}>
                     {groupedOrders[status].length === 0 ? (
                       <p
                         className={`rounded-xl border border-dashed bg-slate-900/50 px-4 py-8 text-center text-sm font-medium ${meta.emptyClass}`}
@@ -277,6 +475,7 @@ export const KdsDashboard = () => {
                           onMove={handleMoveOrder}
                           isUpdating={updatingOrderId === order.id}
                           isMoving={movingOrderIds.includes(order.id)}
+                          density={densityMode}
                         />
                       ))
                     )}
