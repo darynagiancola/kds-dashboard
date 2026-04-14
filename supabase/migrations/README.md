@@ -10,6 +10,7 @@ Apply these files in numeric order:
 6. `006_realtime_publication.sql`
 7. `007_audit_logs.sql`
 8. `008_standardize_order_item_modifiers.sql`
+9. `009_kds_anon_read_policies.sql`
 
 Then run test script:
 

@@ -4,10 +4,12 @@ import { isSupabaseConfigured, supabase } from '../lib/supabaseClient'
 import { ORDER_STATUSES, type Order, type OrderStatus } from '../types/orders'
 import { createIncomingMockOrder, initialMockOrders } from '../lib/mockOrders'
 
+type DatabaseOrderStatus = 'new' | 'in_progress' | 'ready' | 'delivered' | 'prep'
+
 type OrderRow = {
   id: number
   table_number: number
-  status: OrderStatus
+  status: DatabaseOrderStatus
   priority?: Order['priority']
   created_at: string
   order_items: {
@@ -29,6 +31,26 @@ const priorityRank: Record<NonNullable<Order['priority']>, number> = {
   rush: 0,
   high: 1,
   normal: 2,
+}
+
+const toUiStatus = (status: DatabaseOrderStatus): OrderStatus | null => {
+  if (status === 'new') {
+    return 'new'
+  }
+  if (status === 'in_progress' || status === 'prep') {
+    return 'prep'
+  }
+  if (status === 'ready') {
+    return 'ready'
+  }
+  return null
+}
+
+const toDatabaseStatus = (status: OrderStatus): 'new' | 'in_progress' | 'ready' => {
+  if (status === 'prep') {
+    return 'in_progress'
+  }
+  return status
 }
 
 const columnMeta: Record<
@@ -133,14 +155,25 @@ export const KdsDashboard = () => {
     if (queryError) {
       setError(queryError.message)
     } else {
-      const parsedOrders = ((data as OrderRow[] | null) ?? []).map((order) => ({
-        ...order,
-        priority: order.priority ?? 'normal',
-        order_items: (order.order_items ?? []).map((item) => ({
-          ...item,
-          modifiers: item.modifiers ?? [],
-        })),
-      }))
+      const parsedOrders = ((data as OrderRow[] | null) ?? [])
+        .map((order) => {
+          const normalizedStatus = toUiStatus(order.status)
+          if (!normalizedStatus) {
+            return null
+          }
+
+          return {
+            ...order,
+            status: normalizedStatus,
+            priority: order.priority ?? 'normal',
+            order_items: (order.order_items ?? []).map((item) => ({
+              ...item,
+              modifiers: item.modifiers ?? [],
+            })),
+          }
+        })
+        .filter((order): order is Order => order !== null)
+
       setOrders(parsedOrders)
       setError(null)
     }
@@ -350,7 +383,10 @@ export const KdsDashboard = () => {
     const { error: updateError } =
       nextStep === 'complete'
         ? await supabase.from('orders').delete().eq('id', orderId)
-        : await supabase.from('orders').update({ status: nextStep }).eq('id', orderId)
+        : await supabase
+            .from('orders')
+            .update({ status: toDatabaseStatus(nextStep) })
+            .eq('id', orderId)
 
     if (updateError) {
       setError(updateError.message)
