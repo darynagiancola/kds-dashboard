@@ -1,0 +1,23 @@
+# Supabase migration sequence (KDS backend)
+
+Apply these files in numeric order:
+
+1. `001_extensions_and_enums.sql`
+2. `002_core_tables.sql`
+3. `003_updated_at_and_profile_bootstrap.sql`
+4. `004_status_history_and_guards.sql`
+5. `005_rls_and_policies.sql`
+6. `006_realtime_publication.sql`
+7. `007_audit_logs.sql`
+
+Then run test script:
+
+- `../tests/rls_verification_queries.sql`
+
+## Notes
+
+- `profiles.id` is linked 1:1 to `auth.users.id`.
+- `orders.status` uses: `new`, `in_progress`, `ready`, `delivered`.
+- Kitchen can only move status forward: `new -> in_progress -> ready -> delivered`.
+- Waiters can only mutate their own orders while still `new`.
+- Admin has full access.
